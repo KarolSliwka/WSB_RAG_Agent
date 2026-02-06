@@ -1,0 +1,10 @@
+{
+    "collections": [
+        {
+            "name": "documents"
+        },
+        {
+            "name": "tickets"
+        }
+    ]
+}

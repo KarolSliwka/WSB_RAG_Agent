@@ -1,0 +1,19 @@
+{
+    "models": [
+        {
+            "name": "ollama",
+            "url": "http://ollama:11434"
+        },
+        {
+            "name": "qdrant",
+            "url": "http://qdrant:6333"
+        },
+        {
+            "name": "mistral"
+        },
+        {
+            "name": "nomic-embed-text",
+            "embeding": "768"
+        }
+    ]
+}
