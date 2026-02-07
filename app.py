@@ -18,10 +18,10 @@ CSS_FILE = BASE_DIR / "static" / "css" / "main.css"
 
 ## Documents directories
 DOCS_DIR = BASE_DIR / "documents"
-INCOMING_DIR = DOCS_DIR / "incoming"
 KNOWLEDGE_DIR = DOCS_DIR / "knowledge"
-PROCESSED_DIR = DOCS_DIR / "processed_documents"
 LOGS_DIR = DOCS_DIR / "logs"
+UPLOADS_DIR = DOCS_DIR / "uploads"
+PROCESSED_DIR = DOCS_DIR / "processed"
 
 ## Settings directory (json files)
 SETTINGS_DIR = BASE_DIR / "settings"
@@ -47,12 +47,15 @@ from tools.tools import (
     call_responses_api,
     get_text_output,
     import_and_index_documents_qdrant,
-    get_qdrant_information_all
+    get_qdrant_collection_summary,
+    not_imported_files,
+    save_uploaded_file,
+    move_to_processed
 )
 
 # URLs
 #QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant:6333")
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
+#OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
 
 # Initialize Qdrant
 qdrant_client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
@@ -75,8 +78,8 @@ system_prompt = " ".join(f"{key.capitalize()}: {value}" for key, value in llm_se
 developer_prompt = " ".join(f"{key.capitalize()}: {value}" for key, value in llm_settings["developer_prompt"].items())
 
 ## -> Qdrant
-
-
+QDRANT_COLLECTION_DOCS = "Documents"
+QDRANT_COLLECTION_TICKETS = "Tickets"
 ## -> Models
 
 
@@ -90,9 +93,10 @@ class Category:
 category_objects = [Category(name) for name in categories_list["categories"]]
 
 # Get knowledge 
+knowledge_not_imported = not_imported_files(qdrant_client, KNOWLEDGE_DIR) 
 
 # Get Qdrant collections information
-qdrant_collections_info = get_qdrant_information_all(QDRANT_URL, QDRANT_API_KEY)
+qdrant_collections_info = get_qdrant_collection_summary(QDRANT_URL, QDRANT_API_KEY)
 
 # App configurations
 st.set_page_config(
@@ -164,17 +168,24 @@ with st.sidebar:
 
     # Qdrant Management
     st.subheader("Qdrant Management")
-    if st.button(f"Import 'Knowldege' Documents {knowledge_not_imported}"):
+    # Compute not imported files at button click
+    knowledge_not_imported = not_imported_files(qdrant_client, KNOWLEDGE_DIR)
+    st.write(f"Files to import: {knowledge_not_imported}")
+    
+    if st.button(f"Import Documents"):
         import_and_index_documents_qdrant(qdrant_client, client, EMBEDING_MODEL_NAME, KNOWLEDGE_DIR, MODEL_NAME, SETTINGS_DIR)
 
-        # Display each collection
-        for coll in qdrant_collections_info:
-            st.markdown(f"**Collection:** {coll['name']}")
-            st.markdown(f"- Points: {coll['points']}")
-            st.markdown(f"- Segments: {coll['segments']}")
-            st.markdown(f"- Size: {round(coll['size_bytes'] / (1024*1024), 2)} MB")
-            st.markdown(f"- Distance: {coll['distance']}")
-            st.divider()
+    # Display each collection in Streamlit
+    for coll in qdrant_collections_info:
+        st.markdown(f"**Collection:** {coll['name']}")
+        st.markdown(f"- Status: {coll['status']}")
+        st.markdown(f"- Points: {coll['points']}")
+        st.markdown(f"- Segments: {coll['shards']}")
+        st.markdown(f"- Replicas: {coll['replicas']}")
+        st.markdown(f"- Vector Field: {coll['vector_field']}")
+        st.markdown(f"- Vector Size: {coll['vector_size']}")
+        st.markdown(f"- Distance: {coll['distance']}")
+        st.divider()
 
 # Render all previous messages
 for m in st.session_state.messages:
@@ -209,31 +220,30 @@ if uploaded:
 prompt = st.chat_input("Type your message here..")
 
 if prompt is not None:
-    # Rozdziel pliki na obrazy i pozostałe dokumenty
+    # Handle uploaded files only for this user message
     images = []
     documents = []
-    for f in uploaded or []:
-        f.seek(0)
-        if f.type and f.type.startswith("image"):
-            images.append({
-                "mime_type": f"type/{f.type.split('/')[-1]}",
-                "data_url": f"data:{f.type};base64,{base64.b64encode(f.read()).decode('utf-8')}"
-            })
-        else:
-            documents.append(f)  # wszystkie pozostałe pliki jako obiekty
 
-    # Build the input parts for the responses API (tylko obrazy)
+    for f in uploaded or []:
+        # Save file to uploads folder
+        saved_path = save_uploaded_file(f, UPLOADS_DIR)
+        suffix = saved_path.suffix.lower()
+
+        if suffix in [".jpg", ".jpeg", ".png", ".webp"]:
+            # Encode images for chat display
+            with open(saved_path, "rb") as img_f:
+                data_url = f"data:image/{suffix[1:]};base64,{base64.b64encode(img_f.read()).decode('utf-8')}"
+            images.append({"mime_type": f"image/{suffix[1:]}", "data_url": data_url})
+        else:
+            documents.append(saved_path)
+
+    # Build the input parts for the responses API (text + images)
     parts = build_input_parts(prompt, images)
 
-    # Store the messages
-    st.session_state.messages.append(
-        {
-            "role": "user",
-            "content": parts
-        }
-    )
+    # Store the user's message in chat session
+    st.session_state.messages.append({"role": "user", "content": parts})
 
-    # Display the user's message
+    # Display user's message
     with st.chat_message("user"):
         for p in parts:
             if p["type"] == "message":
@@ -243,32 +253,48 @@ if prompt is not None:
                     elif content_item["type"] == "input_image":
                         st.image(content_item["image_url"], width=100)
 
-    # Generate the AI response
+    # Generate AI response
     with st.chat_message("assistant"):
-        with st.spinner("Thinking.."):
+        with st.spinner("Thinking..."):
             try:
-                # Call the refactored function using Qdrant
                 response = call_responses_api(
                     system_prompt=system_prompt,
                     client=client,
                     model_name=MODEL_NAME,
+                    embedding_model_name=EMBEDING_MODEL_NAME,
                     parts=parts,
                     qdrant_client=qdrant_client,
-                    qdrant_collection="Documents",  # replace with your collection name
+                    qdrant_collection=QDRANT_COLLECTION_DOCS,
                     top_k=5,
                     previous_response_id=st.session_state.previous_response_id
                 )
 
                 output_text = get_text_output(response)
-
-                # Display the AI's response
                 st.markdown(output_text)
-
-                # Store assistant message
                 st.session_state.messages.append({"role": "assistant", "content": output_text})
 
-                # Retrieve the ID if available
                 if hasattr(response, "id"):
                     st.session_state.previous_response_id = response.id
+
             except Exception as e:
                 st.error(f"Error generating response: {e}")
+
+    # Process uploaded documents for Qdrant and move to processed
+    for doc_path in documents:
+        text = doc_path.read_text(encoding="utf-8").strip()
+        
+        if len(text) < 1000:
+            st.markdown(f"**Treść dokumentu {doc_path.name}:** {text}")
+        else:
+            # Qdrant processing & embedding
+            import_and_index_documents_qdrant(
+                qdrant_client,
+                client,
+                EMBEDING_MODEL_NAME,
+                doc_path.parent,
+                MODEL_NAME,
+                SETTINGS_DIR
+            )
+        
+        # Move file to processed folder
+        move_to_processed(doc_path)
