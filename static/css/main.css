@@ -1,0 +1,24 @@
+.stMainBlockContainer {
+    padding: 2rem 0 220px 0;
+    /* bottom padding keeps messages clear of fixed bar */
+}
+
+.stMarkdownBadge {
+    padding: .5rem 1.25rem !important;
+    font-size: 1rem !important;
+}
+
+/* Keep the uploader pinned just above the chat input */
+.upload-bar {
+    position: fixed;
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: 88px;
+    /* sit just above the chat input */
+    width: min(900px, calc(100% - 3rem));
+    z-index: 1000;
+}
+
+.upload-bar [data-testid="stFileUploader"] {
+    width: 100%;
+}
