@@ -1,6 +1,7 @@
 import os
 import json
 import uuid
+import shutil
 from pathlib import Path
 from datetime import datetime
 from typing import Any, List, Dict
@@ -27,6 +28,7 @@ def call_responses_api(
     system_prompt: str,
     client,
     model_name: str,
+    embedding_model_name: str,
     parts: List[Dict[str, Any]],
     qdrant_client: QdrantClient = None,
     qdrant_collection: str = None,
@@ -50,7 +52,7 @@ def call_responses_api(
     context_texts = []
     if qdrant_client and qdrant_collection:
         embedding = client.embeddings.create(
-            model=os.getenv("EMBEDING_MODEL_NAME"),
+            model=embedding_model_name,
             input=user_prompt
         ).data[0].embedding
 
@@ -84,51 +86,56 @@ def get_text_output(response: Any) -> str:
     return response.output_text
 
 # Qdrant functions
-def get_qdrant_information_all(qdrant_url, qdrant_api_key):
+def get_qdrant_collection_summary(qdrant_url, qdrant_api_key):
     try:
         qdrant = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
-        collections_info = []
+        summary_list = []
 
-        # Get collection descriptions
+        # Get all collections
         collections_list = qdrant.get_collections().collections
 
         for coll_desc in collections_list:
-            # CollectionDescription has .name
             collection_name = coll_desc.name
 
-            # Get detailed info
+            # Count points
+            points = qdrant.count(collection_name=collection_name).count
+
+            # Get collection details
             coll_info = qdrant.get_collection(collection_name=collection_name)
 
-            # Depending on version, coll_info.vectors may be a dict
-            vectors_count = 0
-            if hasattr(coll_info, "vectors_count"):
-                vectors_count = coll_info.vectors_count
-            elif hasattr(coll_info, "vectors") and isinstance(coll_info.vectors, dict):
-                vectors_count = sum(vectors_count for v in coll_info.vectors.values())
+            # Status / replication info
+            status = getattr(coll_info, "status", "GREEN")  # default to GREEN if missing
+            replication_factor = getattr(coll_info, "replication_factor", 1)
+            shards = getattr(coll_info, "shard_number", len(getattr(coll_info, "shards", [])))
 
-            # Shards / segments
-            segments = len(coll_info.shards) if hasattr(coll_info, "shards") else 0
+            # Vectors info
+            vector_field = "Default"
+            vector_size = 0
+            distance = "unknown"
 
-            # Distance / metric
-            distance = getattr(coll_info, "distance", "unknown")
+            if hasattr(coll_info, "vectors") and isinstance(coll_info.vectors, dict):
+                # Take first vector field
+                vector_field = list(coll_info.vectors.keys())[0]
+                vector_config = list(coll_info.vectors.values())[0]
+                vector_size = getattr(vector_config, "size", 0)
+                distance = getattr(vector_config, "distance", "unknown")
 
-            # Storage size
-            size_bytes = getattr(coll_info, "storage_size", 0)
-
-            collections_info.append({
+            summary_list.append({
                 "name": collection_name,
-                "points": vectors_count,
-                "segments": segments,
-                "size_bytes": size_bytes,
+                "status": status,
+                "points": points,
+                "shards": shards,
+                "replicas": replication_factor,
+                "vector_field": vector_field,
+                "vector_size": vector_size,
                 "distance": distance
             })
 
-        return collections_info
+        return summary_list
 
     except Exception as e:
         print(f"Error fetching Qdrant info: {e}")
         return []
-
 
 # Import and index documents in qdrant
 def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_name, knowledge_dir, model_name, settings_dir):
@@ -146,10 +153,18 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
             vectors_config=VectorParams(size=1536, distance="Cosine")
         )
 
+    # Get list of already imported file paths
+    existing_points, _ = qdrant_client.scroll(collection_name=collection_name, limit=10000)
+    imported_files = set(p.payload.get("source") for p in existing_points if "source" in p.payload)
+
     points_to_upload = []
 
     for file_path in knowledge_dir.glob("**/*"):
         if not file_path.is_file():
+            continue
+
+        if str(file_path) in imported_files:
+            print(f"[SKIP] {file_path} already imported")
             continue
 
         try:
@@ -164,7 +179,6 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
                 doc = docx.Document(str(file_path))
                 text = "\n".join([p.text for p in doc.paragraphs])
             elif file_path.suffix.lower() in [".png", ".jpg", ".jpeg", ".webp"]:
-                # For images, embed without category
                 embedding = embed_image(client, embedding_model_name, file_path)
                 points_to_upload.append(
                     PointStruct(
@@ -181,16 +195,16 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
             else:
                 continue
         except Exception as e:
-            print(f"Failed to read {file_path}: {e}")
+            print(f"[ERROR] Failed to read {file_path}: {e}")
             continue
 
         if not text.strip():
             print(f"[SKIP] {file_path} has no readable text")
             continue
-        else:
-            print(f"[READ] {file_path} length={len(text)}")
 
-        # Determine category for the document
+        print(f"[READ] {file_path} length={len(text)}")
+
+        # Determine category
         try:
             category = determine_category_llm(client, text, categories, model_name)
         except Exception as e:
@@ -227,12 +241,12 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
         for p in points_to_upload
     ), "Invalid point detected (bad ID or vector size)"
 
-    # Upload points in batches
+    # Upload in batches
     batch_size = 20
     for i in range(0, len(points_to_upload), batch_size):
         qdrant_client.upsert(collection_name=collection_name, points=points_to_upload[i:i+batch_size])
 
-    print(f"Indexed {len(points_to_upload)} points into Qdrant collection '{collection_name}'")
+    print(f"Indexed {len(points_to_upload)} new points into Qdrant collection '{collection_name}'")
 
 # Embedding text
 def embed_text(client, embedding_model_name, text: str) -> List[float]:
@@ -294,3 +308,28 @@ def determine_category_llm(client, text, categories, model_name):
     except Exception as e:
         print(f"[ERROR] determine_category_llm failed: {e}")
         return "Pozostałe dokumenty"
+    
+# Get all not imported files to qdrant
+def not_imported_files(qdrant_client, knowledge_dir, collection_name="Documents"):
+    knowledge_dir = Path(knowledge_dir)
+    all_files = {str(f) for f in knowledge_dir.glob("**/*") if f.is_file()}
+
+    # Scroll returns (points, next_page)
+    existing_points, _ = qdrant_client.scroll(collection_name=collection_name, limit=10000)
+    imported_files = {p.payload.get("source") for p in existing_points if "source" in p.payload}
+
+    not_imported = all_files - imported_files
+    return len(not_imported)
+
+def save_uploaded_file(uploaded_file, dest_folder: Path) -> Path:
+    dest_folder.mkdir(parents=True, exist_ok=True)
+    file_path = dest_folder / uploaded_file.name
+    with open(file_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+    return file_path
+
+def move_to_processed(processed_dir, file_path: Path) -> Path:
+    processed_dir.mkdir(parents=True, exist_ok=True)
+    dest = processed_dir / file_path.name
+    shutil.move(str(file_path), str(dest))
+    return dest
