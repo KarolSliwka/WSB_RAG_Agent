@@ -4,6 +4,7 @@ import hashlib
 import pytesseract
 import docx
 import pdfplumber
+import streamlit as st
 from pdf2image import convert_from_path
 from pathlib import Path
 from datetime import datetime
@@ -128,7 +129,7 @@ def get_qdrant_collection_summary(qdrant_url, qdrant_api_key):
 
 def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_name, knowledge_dir, model_name, settings_dir, batch_size=200):
     """
-    Import and index documents into Qdrant collection with batching to avoid HTTP payload limits.
+    Import and index documents into Qdrant collection with Streamlit progress display.
     """
     knowledge_dir = Path(knowledge_dir)
     collection_name = "Documents"
@@ -150,6 +151,11 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
 
     points_to_upload = []
 
+    progress_text = st.empty()  # For status updates
+    progress_bar = st.progress(0)
+    total_files = len(list(knowledge_dir.glob("**/*")))
+    processed_files = 0
+
     def flush_points():
         """Upload current batch and clear list"""
         if points_to_upload:
@@ -164,10 +170,12 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
 
         file_h = hashlib.sha256(file_path.read_bytes()).hexdigest()
         if file_h in imported_hashes:
-            print(f"[SKIP] Already imported: {file_path}")
+            progress_text.write(f"✅ [SKIP] Already imported: {file_path.name}")
+            processed_files += 1
+            progress_bar.progress(processed_files / total_files)
             continue
 
-        print(f"[PROCESSING] {file_path}")
+        progress_text.write(f"⏳ [PROCESSING] {file_path.name}")
 
         text = ""
         try:
@@ -177,6 +185,7 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
             elif suffix == ".pdf":
                 text = extract_text_from_pdf(file_path)
             elif suffix == ".docx":
+                import docx
                 doc = docx.Document(str(file_path))
                 text = "\n".join([p.text for p in doc.paragraphs])
             elif suffix in [".png", ".jpg", ".jpeg", ".webp"]:
@@ -194,17 +203,25 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
                     )
                 )
                 flush_points()
-                print(f"[UPLOADED] Image: {file_path}")
+                progress_text.write(f"✅ [UPLOADED] Image: {file_path.name}")
+                processed_files += 1
+                progress_bar.progress(processed_files / total_files)
                 continue
             else:
-                print(f"[SKIP] Unsupported file type: {file_path}")
+                progress_text.write(f"⚠️ [SKIP] Unsupported file type: {file_path.name}")
+                processed_files += 1
+                progress_bar.progress(processed_files / total_files)
                 continue
         except Exception as e:
-            print(f"[ERROR] Failed to read {file_path}: {e}")
+            progress_text.write(f"❌ [ERROR] Failed to read {file_path.name}: {e}")
+            processed_files += 1
+            progress_bar.progress(processed_files / total_files)
             continue
 
         if not text.strip():
-            print(f"[WARN] No text extracted from {file_path}, skipping")
+            progress_text.write(f"⚠️ [WARN] No text extracted from {file_path.name}, skipping")
+            processed_files += 1
+            progress_bar.progress(processed_files / total_files)
             continue
 
         try:
@@ -224,7 +241,7 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
             try:
                 embedding = embed_text(client, embedding_model_name, chunk_text)
             except Exception as e:
-                print(f"[ERROR] Failed to embed chunk: {e}")
+                progress_text.write(f"❌ [ERROR] Failed to embed chunk: {e}")
                 continue
 
             points_to_upload.append(
@@ -243,13 +260,15 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
                 )
             )
 
-            # Flush batch if reaching batch_size
             if len(points_to_upload) >= batch_size:
                 flush_points()
 
-    # Upload any remaining points
+        processed_files += 1
+        progress_bar.progress(processed_files / total_files)
+        progress_text.write(f"✅ [UPLOADED] {file_path.name}")
+
     flush_points()
-    print(f"[INFO] Finished uploading points to {collection_name}")
+    progress_text.write(f"🎉 Finished uploading points to {collection_name}")
 
 
 def extract_text_from_pdf(file_path):
@@ -269,14 +288,17 @@ def extract_text_from_pdf(file_path):
                 if page_text and page_text.strip():
                     full_text.append(page_text)
                 else:
-                    # Page might be image-based → use OCR
-                    print(f"[OCR] Page {i} might be image-based, performing OCR")
-                    images = convert_from_path(file_path, first_page=i+1, last_page=i+1)
-                    for img in images:
-                        ocr_text = pytesseract.image_to_string(img, lang="pol")
-                        full_text.append(ocr_text)
+                    # Page is likely scanned → OCR
+                    print(f"[OCR] Page {i+1} might be image-based, performing OCR")
+                    try:
+                        images = convert_from_path(str(file_path), first_page=i+1, last_page=i+1, dpi=300)
+                        for img in images:
+                            ocr_text = pytesseract.image_to_string(img, lang="pol")
+                            full_text.append(ocr_text)
+                    except Exception as ocr_err:
+                        print(f"[ERROR] OCR failed on page {i+1} of {file_path}: {ocr_err}")
     except Exception as e:
-        print(f"[ERROR] Failed to read PDF {file_path}: {e}")
+        print(f"[ERROR] Failed to open PDF {file_path}: {e}")
         return ""
 
     # Normalize line breaks and remove empty lines

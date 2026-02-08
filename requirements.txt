@@ -45,6 +45,7 @@ pdfminer.six==20251230
 pdfplumber==0.11.9
 pexpect==4.9.0
 pillow==12.1.0
+poppler-utils==0.1.0
 portalocker==3.2.0
 prompt_toolkit==3.0.52
 protobuf==6.33.5
