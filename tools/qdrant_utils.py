@@ -1,5 +1,6 @@
 import json
 import uuid
+import hashlib
 from pathlib import Path
 from datetime import datetime
 from qdrant_client import QdrantClient
@@ -7,23 +8,71 @@ from qdrant_client.models import PointStruct, VectorParams
 from .api_utils import embed_text, embed_image
 from .llm_utils import determine_category_llm
 
+def ensure_collections_exist(qdrant_client, collections=None, vector_size=1536, distance="Cosine"):
+    """
+    Ensures that the specified Qdrant collections exist. 
+    If a collection does not exist, it will be created with default vector settings.
+
+    Args:
+        qdrant_client: QdrantClient instance.
+        collections: List of collection names to ensure exist.
+        vector_size: Dimensionality of vector embeddings.
+        distance: Distance metric to use ("Cosine", "Euclid", "Dot").
+    """
+    if collections is None:
+        collections = ["Documents", "Knowledge", "Processed", "Tickets"]
+
+    # Get current collections in Qdrant
+    existing_collections = [c.name for c in qdrant_client.get_collections().collections]
+
+    for collection_name in collections:
+        if collection_name.lower() not in existing_collections:
+            print(f"[INFO] Creating missing collection: {collection_name}")
+            qdrant_client.recreate_collection(
+                collection_name=collection_name,
+                vectors_config=VectorParams(size=vector_size, distance=distance)
+            )
+        else:
+            print(f"[INFO] Collection already exists: {collection_name}")
+
+
+def file_hash(file_path):
+    """
+    Compute SHA256 hash of a file.
+    """
+    sha256_hash = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for byte_block in iter(lambda: f.read(4096), b""):
+            sha256_hash.update(byte_block)
+    return sha256_hash.hexdigest()
+
 def not_imported_files(qdrant_client, knowledge_dir, collection_name="Documents"):
     """
-    Returns the number of files in a directory not yet imported into a Qdrant collection.
+    Returns the number of files in a directory not yet imported into a Qdrant collection,
+    using file hashes for accurate deduplication across sources.
     """
     knowledge_dir = Path(knowledge_dir)
-    all_files = {str(f) for f in knowledge_dir.glob("**/*") if f.is_file()}
+
+    # Fetch all points from Qdrant
     existing_points, _ = qdrant_client.scroll(collection_name=collection_name, limit=10000)
-    imported_files = {p.payload.get("source") for p in existing_points if "source" in p.payload}
-    return len(all_files - imported_files)
+    imported_hashes = {p.payload.get("hash") for p in existing_points if "hash" in p.payload}
+
+    # Compute hashes for all local files
+    all_hashes = {file_hash(f) for f in knowledge_dir.glob("**/*") if f.is_file()}
+
+    # Files not yet imported
+    not_imported = all_hashes - imported_hashes
+    return len(not_imported)
 
 def get_qdrant_collection_summary(qdrant_url, qdrant_api_key):
     """
-    Fetch summary info for all Qdrant collections.
+    Fetch summary info for all Qdrant collections and sort in custom order:
+    Documents, Knowledge, Processed, Tickets
     """
     try:
         qdrant = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
         summary_list = []
+        
         for coll_desc in qdrant.get_collections().collections:
             collection_name = coll_desc.name
             points = qdrant.count(collection_name=collection_name).count
@@ -31,14 +80,17 @@ def get_qdrant_collection_summary(qdrant_url, qdrant_api_key):
             status = getattr(coll_info, "status", "GREEN")
             replication_factor = getattr(coll_info, "replication_factor", 1)
             shards = getattr(coll_info, "shard_number", len(getattr(coll_info, "shards", [])))
+            
             vector_field = "Default"
             vector_size = 0
             distance = "unknown"
+            
             if hasattr(coll_info, "vectors") and isinstance(coll_info.vectors, dict):
                 vector_field = list(coll_info.vectors.keys())[0]
                 vector_config = list(coll_info.vectors.values())[0]
                 vector_size = getattr(vector_config, "size", 0)
                 distance = getattr(vector_config, "distance", "unknown")
+            
             summary_list.append({
                 "name": collection_name,
                 "status": status,
@@ -49,34 +101,53 @@ def get_qdrant_collection_summary(qdrant_url, qdrant_api_key):
                 "vector_size": vector_size,
                 "distance": distance
             })
+
+        # Custom sort order
+        order = ["Documents", "Knowledge", "Processed", "Tickets"]
+        summary_list.sort(key=lambda x: order.index(x["name"]) if x["name"] in order else len(order))
+
         return summary_list
+
     except Exception as e:
         print(f"Error fetching Qdrant info: {e}")
         return []
 
 def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_name, knowledge_dir, model_name, settings_dir):
     """
-    Import and index documents into Qdrant collection.
+    Import and index documents into Qdrant collection using SHA256 hashes to avoid duplicates.
+    Supports text (.txt, .md), PDF, DOCX, and images (.png, .jpg, .jpeg, .webp).
     """
     knowledge_dir = Path(knowledge_dir)
     collection_name = "Documents"
-    with open(f"{settings_dir}/categories.json", "r", encoding="utf-8") as f:
-        categories = json.load(f)["categories"]
 
+    # Load categories for classification
+    with open(Path(settings_dir) / "categories.json", "r", encoding="utf-8") as f:
+        categories = json.load(f).get("categories", [])
+
+    # Create collection if it doesn't exist
     if collection_name not in [c.name for c in qdrant_client.get_collections().collections]:
         qdrant_client.recreate_collection(
             collection_name=collection_name,
             vectors_config=VectorParams(size=1536, distance="Cosine")
         )
 
+    # Fetch existing points to avoid duplicates
     existing_points, _ = qdrant_client.scroll(collection_name=collection_name, limit=10000)
-    imported_files = set(p.payload.get("source") for p in existing_points if "source" in p.payload)
+    imported_hashes = {p.payload.get("hash") for p in existing_points if "hash" in p.payload}
+
     points_to_upload = []
 
     for file_path in knowledge_dir.glob("**/*"):
-        if not file_path.is_file() or str(file_path) in imported_files:
+        if not file_path.is_file():
             continue
+
+        # Compute file hash for deduplication
+        file_h = file_hash(file_path)
+        if file_h in imported_hashes:
+            continue  # Already imported
+
         try:
+            # Read file content based on type
             if file_path.suffix.lower() in [".txt", ".md"]:
                 text = file_path.read_text(encoding="utf-8")
             elif file_path.suffix.lower() == ".pdf":
@@ -88,17 +159,23 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
                 doc = docx.Document(str(file_path))
                 text = "\n".join([p.text for p in doc.paragraphs])
             elif file_path.suffix.lower() in [".png", ".jpg", ".jpeg", ".webp"]:
+                # Image embedding
                 embedding = embed_image(client, embedding_model_name, file_path)
                 points_to_upload.append(
                     PointStruct(
                         id=str(uuid.uuid4()),
                         vector=embedding,
-                        payload={"source": str(file_path), "type": "image", "upload_timestamp": datetime.utcnow().isoformat()}
+                        payload={
+                            "source": str(file_path),
+                            "type": "image",
+                            "hash": file_h,
+                            "upload_timestamp": datetime.utcnow().isoformat()
+                        }
                     )
                 )
-                continue
+                continue  # Skip text processing
             else:
-                continue
+                continue  # Unsupported file type
         except Exception as e:
             print(f"[ERROR] Failed to read {file_path}: {e}")
             continue
@@ -106,30 +183,15 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
         if not text.strip():
             continue
 
+        # Determine category using LLM
         try:
             category = determine_category_llm(client, text, categories, model_name)
         except Exception:
             category = "Pozostałe dokumenty"
 
+        # Split text into chunks for embedding
         chunk_size = 800
         overlap = 200
         start = 0
         while start < len(text):
             end = min(start + chunk_size, len(text))
-            chunk_text = text[start:end]
-            embedding = embed_text(client, embedding_model_name, chunk_text)
-            points_to_upload.append(
-                PointStruct(
-                    id=str(uuid.uuid4()),
-                    vector=embedding,
-                    payload={"text": chunk_text, "source": str(file_path), "category": category, "upload_timestamp": datetime.utcnow().isoformat()}
-                )
-            )
-            if end == len(text):
-                break
-            start += chunk_size - overlap
-
-    batch_size = 20
-    for i in range(0, len(points_to_upload), batch_size):
-        qdrant_client.upsert(collection_name=collection_name, points=points_to_upload[i:i+batch_size])
-    print(f"Indexed {len(points_to_upload)} new points into '{collection_name}'")

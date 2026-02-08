@@ -49,6 +49,8 @@ os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 
 # Initialize Qdrant
 qdrant_client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+# Ensure required collections exist
+ensure_collections_exist(qdrant_client)
 
 # Load css file to override streamlit styles
 @st.cache_data
@@ -65,7 +67,6 @@ with open(f"{SETTINGS_DIR}/llm.json", "r", encoding="utf-8") as file:
     llm_settings = json.load(file)
 ## System Prompt
 system_prompt = build_system_prompt(llm_settings["system_prompt"])
-print(system_prompt)
 
 ## -> Qdrant
 QDRANT_COLLECTION_DOCS = "Documents"
