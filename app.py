@@ -88,39 +88,42 @@ qdrant_collections_info = get_qdrant_collection_summary(QDRANT_URL, QDRANT_API_K
 
 # App configurations
 st.set_page_config(
-    page_title="WSB Agent",
+    page_title="AI RAG Agent",
     page_icon=":material/chat_bubble:", # speech bubble icon
     layout="centered"
 )
 
 # Add title to the app
-st.title("WSB AI Agent")
+st.title("AI RAG Agent")
 
 # Add a description to the ap
-st.markdown("**Your inteligent WSB Assistant powered by GPT-5 and RAG technology**")
+st.markdown("**Your inteligent AI Assistant powered by GPT-5 and RAG technology**")
 st.divider()
 
 # Add a collapsible section
 with st.expander("About this chat", expanded=False):
     st.markdown(
         """
-        ### WSB Intelligent Assistant (Chat & Ticketing)
+        ### Intelligent Assistant (Chat & Ticketing)
         - Model
-            - **GPT-5**  via **OpenAI Responses API**
+            - **GPT-5 class** (configurable via `MODEL_NAME`) using **OpenAI Responses API**
         - Retrieval (RAG)
-            - **File Search Tool**  Using a pre-built **Vector Store** to ground answers in your documents.
+            - **Qdrant vector search** (top-k context from `Documents` collection) to ground answers in your docs.
         - Features
             - Multi-turn conversational chat
             - Document & image input
             - Clear / reset conversation
-        - Secrets & Configuration Reads the following from **Streamlit secrets** or environment variables:
+        - Secrets & Configuration (env or Streamlit secrets):
             - `OPENAI_API_KEY`
-            - `VECTOR_STORE_ID`
+            - `MODEL_NAME`
+            - `EMBEDING_MODEL_NAME`
+            - `QDRANT_URL`
+            - `QDRANT_API_KEY`
         ---
         - How it works
-            1. Your message (and optional document or image) is sent to the **Responses API**
-            2. Relevant passages are retrieved from the **Vector Store**
-            3. The model uses this context to generate a grounded, accurate response
+            1. Your message (plus optional uploads) is sent to the **Responses API**
+            2. Relevant passages are fetched from **Qdrant** using embeddings from `EMBEDING_MODEL_NAME`
+            3. The model blends the retrieved context to return grounded, concise answers
         """
     )
 
@@ -129,9 +132,13 @@ client = OpenAI()
 
 # Warn if OpenAI API Key or the VectorStoreId are not set
 if not OPENAI_API_KEY:
-    st.warning("OpenAI API Key is not set. Please set the OpenAi API key in the environment")
-# if not VECTOR_STORE_ID:
-#     st.warning("Vector store ID is not set. Please set the Vector Store ID in the environment")
+    st.warning("OpenAI API Key is not set. Please set OPENAI_API_KEY in the environment")
+if not MODEL_NAME:
+    st.warning("Model name is not set. Please set MODEL_NAME in the environment")
+if not EMBEDING_MODEL_NAME:
+    st.warning("Embedding model name is not set. Please set EMBEDING_MODEL_NAME in the environment")
+if not QDRANT_URL or not QDRANT_API_KEY:
+    st.warning("Qdrant connection is not set. Please set QDRANT_URL and QDRANT_API_KEY in the environment")
 
 # Store the previous response id
 if "previous_response_id" not in st.session_state:
@@ -152,28 +159,28 @@ with st.sidebar:
         # Reest the page
         st.rerun()
 
-    st.divider()
+    # st.divider()
 
     # Qdrant Management
-    st.subheader("Qdrant Management")
+    # st.subheader("Qdrant Management")
     # Compute not imported files at button click
-    knowledge_not_imported = not_imported_files(qdrant_client, KNOWLEDGE_DIR)
-    st.write(f"Files to import: {knowledge_not_imported}")
+    # knowledge_not_imported = not_imported_files(qdrant_client, KNOWLEDGE_DIR)
+    # st.write(f"Files to import: {knowledge_not_imported}")
     
-    if st.button(f"Import Documents"):
-        import_and_index_documents_qdrant(qdrant_client, client, EMBEDING_MODEL_NAME, KNOWLEDGE_DIR, MODEL_NAME, SETTINGS_DIR)
+    # if st.button(f"Import Documents"):
+        # import_and_index_documents_qdrant(qdrant_client, client, EMBEDING_MODEL_NAME, KNOWLEDGE_DIR, MODEL_NAME, SETTINGS_DIR)
 
     # Display each collection in Streamlit
-    for coll in qdrant_collections_info:
-        st.markdown(f"**Collection:** {coll['name']}")
-        st.markdown(f"- Status: {coll['status']}")
-        st.markdown(f"- Points: {coll['points']}")
-        st.markdown(f"- Segments: {coll['shards']}")
-        st.markdown(f"- Replicas: {coll['replicas']}")
-        st.markdown(f"- Vector Field: {coll['vector_field']}")
-        st.markdown(f"- Vector Size: {coll['vector_size']}")
-        st.markdown(f"- Distance: {coll['distance']}")
-        st.divider()
+    # for coll in qdrant_collections_info:
+    #     st.markdown(f"**Collection:** {coll['name']}")
+    #     st.markdown(f"- Status: {coll['status']}")
+    #     st.markdown(f"- Points: {coll['points']}")
+    #     st.markdown(f"- Segments: {coll['shards']}")
+    #     st.markdown(f"- Replicas: {coll['replicas']}")
+    #     st.markdown(f"- Vector Field: {coll['vector_field']}")
+    #     st.markdown(f"- Vector Size: {coll['vector_size']}")
+    #     st.markdown(f"- Distance: {coll['distance']}")
+    #     st.divider()
 
 # Render all previous messages
 for m in st.session_state.messages:
