@@ -126,11 +126,9 @@ def get_qdrant_collection_summary(qdrant_url, qdrant_api_key):
         print(f"Error fetching Qdrant info: {e}")
         return []
 
-def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_name, knowledge_dir, model_name, settings_dir):
+def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_name, knowledge_dir, model_name, settings_dir, batch_size=200):
     """
-    Import and index documents into Qdrant collection using SHA256 hashes to avoid duplicates.
-    Supports text (.txt, .md), PDF, DOCX, and images (.png, .jpg, .jpeg, .webp).
-    Robust PDF handling with lists, bullets, OCR, and Unicode support.
+    Import and index documents into Qdrant collection with batching to avoid HTTP payload limits.
     """
     knowledge_dir = Path(knowledge_dir)
     collection_name = "Documents"
@@ -151,6 +149,14 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
     imported_hashes = {p.payload.get("hash") for p in existing_points if "hash" in p.payload}
 
     points_to_upload = []
+
+    def flush_points():
+        """Upload current batch and clear list"""
+        if points_to_upload:
+            for i in range(0, len(points_to_upload), batch_size):
+                batch = points_to_upload[i:i+batch_size]
+                qdrant_client.upsert(collection_name=collection_name, points=batch)
+            points_to_upload.clear()
 
     for file_path in knowledge_dir.glob("**/*"):
         if not file_path.is_file():
@@ -174,7 +180,6 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
                 doc = docx.Document(str(file_path))
                 text = "\n".join([p.text for p in doc.paragraphs])
             elif suffix in [".png", ".jpg", ".jpeg", ".webp"]:
-                # Image embedding
                 embedding = embed_image(client, embedding_model_name, file_path)
                 points_to_upload.append(
                     PointStruct(
@@ -188,6 +193,7 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
                         }
                     )
                 )
+                flush_points()
                 print(f"[UPLOADED] Image: {file_path}")
                 continue
             else:
@@ -201,13 +207,12 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
             print(f"[WARN] No text extracted from {file_path}, skipping")
             continue
 
-        # Determine category
         try:
             category = determine_category_llm(client, text, categories, model_name)
         except Exception:
             category = "Pozostałe dokumenty"
 
-        # Chunking for embeddings
+        # Chunk text and embed
         chunk_size = 800
         overlap = 200
         start = 0
@@ -238,10 +243,14 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
                 )
             )
 
-    # Upload all points in bulk if any
-    if points_to_upload:
-        qdrant_client.upsert(collection_name=collection_name, points=points_to_upload)
-        print(f"[INFO] Uploaded {len(points_to_upload)} points to {collection_name}")
+            # Flush batch if reaching batch_size
+            if len(points_to_upload) >= batch_size:
+                flush_points()
+
+    # Upload any remaining points
+    flush_points()
+    print(f"[INFO] Finished uploading points to {collection_name}")
+
 
 def extract_text_from_pdf(file_path):
     """
