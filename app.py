@@ -268,6 +268,23 @@ if prompt is not None:
                 st.markdown(output_text)
                 st.session_state.messages.append({"role": "assistant", "content": output_text})
 
+                # Check if a ticket should be created
+                if should_create_ticket(prompt, output_text):
+                    ticket_data = {
+                        "first_name": "Karol",
+                        "last_name": "Śliwka",
+                        "email": "contact@karolsliwka.com",
+                        "index_number": "72726",
+                        "description": prompt,  # user query / reason for ticket
+                        "title": prompt[:50] + "...",
+                        "priority": "Medium"
+                    }
+                    try:
+                        ticket_id = create_ticket_in_qdrant(qdrant_client, ticket_data)
+                        st.success(f"Ticket automatically created in Qdrant Tickets collection with ID: {ticket_id}")
+                    except ValueError as e:
+                        st.warning(str(e))
+
                 if hasattr(response, "id"):
                     st.session_state.previous_response_id = response.id
 

@@ -12,6 +12,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import PointStruct, VectorParams
 from .api_utils import embed_text, embed_image
 from .llm_utils import determine_category_llm
+from .ticket import Ticket
 
 def ensure_collections_exist(qdrant_client, collections=None, vector_size=1536, distance="Cosine"):
     """
@@ -304,3 +305,51 @@ def extract_text_from_pdf(file_path):
     # Normalize line breaks and remove empty lines
     combined_text = "\n".join([line.strip() for line in "\n".join(full_text).splitlines() if line.strip()])
     return combined_text
+
+def create_ticket_in_qdrant(qdrant_client, ticket_data: dict, embedding_vector=None):
+    """
+    Create a ticket in the Qdrant 'Tickets' collection.
+    Only creates a ticket if all required fields are present.
+
+    Args:
+        qdrant_client: QdrantClient instance
+        ticket_data: dict with keys:
+            - first_name
+            - last_name
+            - email
+            - index_number
+            - description
+            - title (optional)
+            - priority (optional, default 'Medium')
+        embedding_vector: optional vector for semantic search
+
+    Returns:
+        str: ticket_id of the created ticket
+
+    Raises:
+        ValueError: if required fields are missing
+    """
+    REQUIRED_FIELDS = ["first_name", "last_name", "email", "index_number", "description"]
+    missing = [f for f in REQUIRED_FIELDS if not ticket_data.get(f)]
+    if missing:
+        raise ValueError(f"Nie można utworzyć ticketu. Brakujące dane: {', '.join(missing)}")
+
+    # Create Ticket object
+    ticket = Ticket(
+        title=ticket_data.get("title", ticket_data["description"][:50] + "..."),
+        description=ticket_data["description"],
+        created_by=f"{ticket_data['first_name']} {ticket_data['last_name']}",
+        priority=ticket_data.get("priority", "Medium")
+    )
+
+    # Use embedding vector if provided, else default zero vector
+    vector = embedding_vector if embedding_vector else [0.0]*1536
+
+    point = PointStruct(
+        id=str(uuid.uuid4()),
+        vector=vector,
+        payload=ticket.as_dict()
+    )
+
+    qdrant_client.upsert(collection_name="Tickets", points=[point])
+    return ticket.ticket_id
