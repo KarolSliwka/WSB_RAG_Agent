@@ -6,8 +6,10 @@ attrs==25.4.0
 blinker==1.9.0
 cachetools==6.2.6
 certifi==2026.1.4
+cffi==2.0.0
 charset-normalizer==3.4.4
 click==8.3.1
+cryptography==46.0.4
 decorator==5.2.1
 distro==1.9.0
 dotenv==0.9.9
@@ -38,6 +40,9 @@ openai==2.17.0
 packaging==26.0
 pandas==2.3.3
 parso==0.8.5
+pdf2image==1.17.0
+pdfminer.six==20251230
+pdfplumber==0.11.9
 pexpect==4.9.0
 pillow==12.1.0
 portalocker==3.2.0
@@ -47,11 +52,14 @@ ptyprocess==0.7.0
 pure_eval==0.2.3
 pyarrow==23.0.0
 pybase64==1.4.3
+pycparser==3.0
 pydantic==2.12.5
 pydantic_core==2.41.5
 pydeck==0.9.1
 Pygments==2.19.2
 PyPDF2==3.0.1
+pypdfium2==5.3.0
+pytesseract==0.3.13
 python-dateutil==2.9.0.post0
 python-docx==1.2.0
 python-dotenv==1.2.1

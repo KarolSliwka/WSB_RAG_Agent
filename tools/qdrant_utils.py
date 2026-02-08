@@ -1,6 +1,10 @@
 import json
 import uuid
 import hashlib
+import pytesseract
+import docx
+import pdfplumber
+from pdf2image import convert_from_path
 from pathlib import Path
 from datetime import datetime
 from qdrant_client import QdrantClient
@@ -126,22 +130,23 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
     """
     Import and index documents into Qdrant collection using SHA256 hashes to avoid duplicates.
     Supports text (.txt, .md), PDF, DOCX, and images (.png, .jpg, .jpeg, .webp).
+    Robust PDF handling with lists, bullets, OCR, and Unicode support.
     """
     knowledge_dir = Path(knowledge_dir)
     collection_name = "Documents"
 
-    # Load categories for classification
+    # Load categories
     with open(Path(settings_dir) / "categories.json", "r", encoding="utf-8") as f:
         categories = json.load(f).get("categories", [])
 
-    # Create collection if it doesn't exist
+    # Ensure collection exists
     if collection_name not in [c.name for c in qdrant_client.get_collections().collections]:
         qdrant_client.recreate_collection(
             collection_name=collection_name,
             vectors_config=VectorParams(size=1536, distance="Cosine")
         )
 
-    # Fetch existing points to avoid duplicates
+    # Fetch existing hashes to avoid duplicates
     existing_points, _ = qdrant_client.scroll(collection_name=collection_name, limit=10000)
     imported_hashes = {p.payload.get("hash") for p in existing_points if "hash" in p.payload}
 
@@ -151,27 +156,24 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
         if not file_path.is_file():
             continue
 
-        # Compute file hash for deduplication
-        file_h = file_hash(file_path)
+        file_h = hashlib.sha256(file_path.read_bytes()).hexdigest()
         if file_h in imported_hashes:
             print(f"[SKIP] Already imported: {file_path}")
-            continue  # Already imported
+            continue
 
-        print(f"[PROCESSING] {file_path}")  # <-- Print every file being processed
+        print(f"[PROCESSING] {file_path}")
 
+        text = ""
         try:
-            # Read file content based on type
-            if file_path.suffix.lower() in [".txt", ".md"]:
+            suffix = file_path.suffix.lower()
+            if suffix in [".txt", ".md"]:
                 text = file_path.read_text(encoding="utf-8")
-            elif file_path.suffix.lower() == ".pdf":
-                from PyPDF2 import PdfReader
-                reader = PdfReader(str(file_path))
-                text = "\n".join([p.extract_text() for p in reader.pages if p.extract_text()])
-            elif file_path.suffix.lower() == ".docx":
-                import docx
+            elif suffix == ".pdf":
+                text = extract_text_from_pdf(file_path)
+            elif suffix == ".docx":
                 doc = docx.Document(str(file_path))
                 text = "\n".join([p.text for p in doc.paragraphs])
-            elif file_path.suffix.lower() in [".png", ".jpg", ".jpeg", ".webp"]:
+            elif suffix in [".png", ".jpg", ".jpeg", ".webp"]:
                 # Image embedding
                 embedding = embed_image(client, embedding_model_name, file_path)
                 points_to_upload.append(
@@ -186,28 +188,88 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
                         }
                     )
                 )
-                print(f"[UPLOADED] Image: {file_path}")  # optional for images
-                continue  # Skip text processing
+                print(f"[UPLOADED] Image: {file_path}")
+                continue
             else:
                 print(f"[SKIP] Unsupported file type: {file_path}")
-                continue  # Unsupported file type
+                continue
         except Exception as e:
             print(f"[ERROR] Failed to read {file_path}: {e}")
             continue
 
-
         if not text.strip():
+            print(f"[WARN] No text extracted from {file_path}, skipping")
             continue
 
-        # Determine category using LLM
+        # Determine category
         try:
             category = determine_category_llm(client, text, categories, model_name)
         except Exception:
             category = "Pozostałe dokumenty"
 
-        # Split text into chunks for embedding
+        # Chunking for embeddings
         chunk_size = 800
         overlap = 200
         start = 0
         while start < len(text):
             end = min(start + chunk_size, len(text))
+            chunk_text = text[start:end]
+            start += chunk_size - overlap
+
+            try:
+                embedding = embed_text(client, embedding_model_name, chunk_text)
+            except Exception as e:
+                print(f"[ERROR] Failed to embed chunk: {e}")
+                continue
+
+            points_to_upload.append(
+                PointStruct(
+                    id=str(uuid.uuid4()),
+                    vector=embedding,
+                    payload={
+                        "source": str(file_path),
+                        "type": "document",
+                        "hash": file_h,
+                        "category": category,
+                        "chunk_start": start,
+                        "chunk_end": end,
+                        "upload_timestamp": datetime.utcnow().isoformat()
+                    }
+                )
+            )
+
+    # Upload all points in bulk if any
+    if points_to_upload:
+        qdrant_client.upsert(collection_name=collection_name, points=points_to_upload)
+        print(f"[INFO] Uploaded {len(points_to_upload)} points to {collection_name}")
+
+def extract_text_from_pdf(file_path):
+    """
+    Robust PDF text extraction:
+    - Handles text PDFs with lists, bullets, tables, special characters
+    - Falls back to OCR for image-based pages
+    """
+    file_path = Path(file_path)
+    full_text = []
+
+    try:
+        with pdfplumber.open(str(file_path)) as pdf:
+            for i, page in enumerate(pdf.pages):
+                page_text = page.extract_text()
+                
+                if page_text and page_text.strip():
+                    full_text.append(page_text)
+                else:
+                    # Page might be image-based → use OCR
+                    print(f"[OCR] Page {i} might be image-based, performing OCR")
+                    images = convert_from_path(file_path, first_page=i+1, last_page=i+1)
+                    for img in images:
+                        ocr_text = pytesseract.image_to_string(img, lang="pol")
+                        full_text.append(ocr_text)
+    except Exception as e:
+        print(f"[ERROR] Failed to read PDF {file_path}: {e}")
+        return ""
+
+    # Normalize line breaks and remove empty lines
+    combined_text = "\n".join([line.strip() for line in "\n".join(full_text).splitlines() if line.strip()])
+    return combined_text
