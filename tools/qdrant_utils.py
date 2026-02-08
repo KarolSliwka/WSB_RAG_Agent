@@ -8,7 +8,9 @@ from .api_utils import embed_text, embed_image
 from .llm_utils import determine_category_llm
 
 def not_imported_files(qdrant_client, knowledge_dir, collection_name="Documents"):
-    """Returns the number of files in a directory not yet imported into a Qdrant collection."""
+    """
+    Returns the number of files in a directory not yet imported into a Qdrant collection.
+    """
     knowledge_dir = Path(knowledge_dir)
     all_files = {str(f) for f in knowledge_dir.glob("**/*") if f.is_file()}
     existing_points, _ = qdrant_client.scroll(collection_name=collection_name, limit=10000)
@@ -16,7 +18,9 @@ def not_imported_files(qdrant_client, knowledge_dir, collection_name="Documents"
     return len(all_files - imported_files)
 
 def get_qdrant_collection_summary(qdrant_url, qdrant_api_key):
-    """Fetch summary info for all Qdrant collections."""
+    """
+    Fetch summary info for all Qdrant collections.
+    """
     try:
         qdrant = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
         summary_list = []
@@ -51,7 +55,9 @@ def get_qdrant_collection_summary(qdrant_url, qdrant_api_key):
         return []
 
 def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_name, knowledge_dir, model_name, settings_dir):
-    """Import and index documents into Qdrant collection."""
+    """
+    Import and index documents into Qdrant collection.
+    """
     knowledge_dir = Path(knowledge_dir)
     collection_name = "Documents"
     with open(f"{settings_dir}/categories.json", "r", encoding="utf-8") as f:

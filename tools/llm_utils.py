@@ -1,5 +1,7 @@
 def determine_category_llm(client, text, categories, model_name):
-    """Determine document category using LLM."""
+    """
+    Determine document category using LLM.
+    """
     try:
         categories_str = "\n".join(f"- {c}" for c in categories)
         prompt = (
@@ -15,7 +17,9 @@ def determine_category_llm(client, text, categories, model_name):
         return "Pozostałe dokumenty"
 
 def build_system_prompt(prompt_dict):
-    """Flatten system prompt dict into formatted string."""
+    """
+    Flatten system prompt dict into formatted string.
+    """
     parts = []
     for key, value in prompt_dict.items():
         if isinstance(value, dict):
