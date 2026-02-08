@@ -8,7 +8,12 @@ def determine_category_llm(client, text, categories, model_name):
             "You are a document classifier. Assign text to exactly one category. Respond with only the category name.\n"
             f"Categories:\n{categories_str}\n\nText:\n{text[:2000]}...\nCategory:"
         )
-        response = client.responses.create(model="gpt-4.1-mini", input=prompt, temperature=0)
+        response = client.responses.create(
+            model=model_name,
+            input=prompt,
+            temperature=0.1,
+            top_p = 0.85
+        )
         category = response.output_text.strip()
         if category not in categories:
             return "Pozostałe dokumenty"
