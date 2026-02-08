@@ -11,13 +11,16 @@ from .llm_utils import determine_category_llm
 def ensure_collections_exist(qdrant_client, collections=None, vector_size=1536, distance="Cosine"):
     """
     Ensures that the specified Qdrant collections exist. 
-    If a collection does not exist, it will be created with default vector settings.
+    Creates missing collections; leaves existing ones untouched.
 
     Args:
         qdrant_client: QdrantClient instance.
         collections: List of collection names to ensure exist.
         vector_size: Dimensionality of vector embeddings.
         distance: Distance metric to use ("Cosine", "Euclid", "Dot").
+
+    Returns:
+        dict: {"created": [...], "already_exist": [...]}
     """
     if collections is None:
         collections = ["Documents", "Knowledge", "Processed", "Tickets"]
@@ -25,15 +28,22 @@ def ensure_collections_exist(qdrant_client, collections=None, vector_size=1536, 
     # Get current collections in Qdrant
     existing_collections = [c.name for c in qdrant_client.get_collections().collections]
 
+    created_collections = []
+    already_exist = []
+
     for collection_name in collections:
-        if collection_name.lower() not in existing_collections:
+        if collection_name not in existing_collections:
             print(f"[INFO] Creating missing collection: {collection_name}")
-            qdrant_client.recreate_collection(
+            qdrant_client.create_collection(
                 collection_name=collection_name,
                 vectors_config=VectorParams(size=vector_size, distance=distance)
             )
+            created_collections.append(collection_name)
         else:
             print(f"[INFO] Collection already exists: {collection_name}")
+            already_exist.append(collection_name)
+
+    return {"created": created_collections, "already_exist": already_exist}
 
 
 def file_hash(file_path):
@@ -144,7 +154,10 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
         # Compute file hash for deduplication
         file_h = file_hash(file_path)
         if file_h in imported_hashes:
+            print(f"[SKIP] Already imported: {file_path}")
             continue  # Already imported
+
+        print(f"[PROCESSING] {file_path}")  # <-- Print every file being processed
 
         try:
             # Read file content based on type
@@ -173,12 +186,15 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
                         }
                     )
                 )
+                print(f"[UPLOADED] Image: {file_path}")  # optional for images
                 continue  # Skip text processing
             else:
+                print(f"[SKIP] Unsupported file type: {file_path}")
                 continue  # Unsupported file type
         except Exception as e:
             print(f"[ERROR] Failed to read {file_path}: {e}")
             continue
+
 
         if not text.strip():
             continue

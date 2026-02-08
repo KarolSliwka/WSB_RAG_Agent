@@ -50,7 +50,8 @@ os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 # Initialize Qdrant
 qdrant_client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 # Ensure required collections exist
-ensure_collections_exist(qdrant_client)
+collections_to_check = ["Documents", "Knowledge", "Processed", "Tickets"]
+result = ensure_collections_exist(qdrant_client, collections_to_check)
 
 # Load css file to override streamlit styles
 @st.cache_data
@@ -59,7 +60,6 @@ def get_css(css_path: Path):
         return f.read()
 
 st.markdown(f"<style>{get_css(CSS_FILE)}</style>", unsafe_allow_html=True)
-
 
 # Load JSON files to objects
 ## -> LLM
@@ -71,8 +71,6 @@ system_prompt = build_system_prompt(llm_settings["system_prompt"])
 ## -> Qdrant
 QDRANT_COLLECTION_DOCS = "Documents"
 QDRANT_COLLECTION_TICKETS = "Tickets"
-## -> Models
-
 
 ## -> Categories
 with open(f"{SETTINGS_DIR}/categories.json", "r", encoding="utf-8") as file:
@@ -85,7 +83,6 @@ category_objects = [Category(name) for name in categories_list["categories"]]
 
 # Get knowledge 
 knowledge_not_imported = not_imported_files(qdrant_client, KNOWLEDGE_DIR) 
-
 # Get Qdrant collections information
 qdrant_collections_info = get_qdrant_collection_summary(QDRANT_URL, QDRANT_API_KEY)
 
