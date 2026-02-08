@@ -1,7 +1,10 @@
+# Imports
 import os, base64
 import streamlit as st
 import json
+# OpenaAI API
 from openai import OpenAI
+# Load env's
 from dotenv import load_dotenv
 from typing import List, Dict, Any
 from pathlib import Path
@@ -9,20 +12,20 @@ from dataclasses import dataclass
 # Qdrant
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import PointStruct
+# Tooling
+from tools.ticket import Ticket
+from tools.tools import *
 
 # Directories
 BASE_DIR = Path(__file__).parent
-
 ## CSS file directory
 CSS_FILE = BASE_DIR / "static" / "css" / "main.css"
-
 ## Documents directories
 DOCS_DIR = BASE_DIR / "documents"
 KNOWLEDGE_DIR = DOCS_DIR / "knowledge"
 LOGS_DIR = DOCS_DIR / "logs"
 UPLOADS_DIR = DOCS_DIR / "uploads"
 PROCESSED_DIR = DOCS_DIR / "processed"
-
 ## Settings directory (json files)
 SETTINGS_DIR = BASE_DIR / "settings"
 
@@ -40,19 +43,6 @@ QDRANT_API_KEY = os.getenv("QDRANT_API_KEY") or st.secrets["QDRANT_API_KEY"]
 # Set the OpenAI API key in the os
 os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 
-# Tooling
-from tools.ticket import Ticket
-from tools.tools import (
-    build_input_parts,
-    call_responses_api,
-    get_text_output,
-    import_and_index_documents_qdrant,
-    get_qdrant_collection_summary,
-    not_imported_files,
-    save_uploaded_file,
-    move_to_processed
-)
-
 # URLs
 #QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant:6333")
 #OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
@@ -68,14 +58,14 @@ def get_css(css_path: Path):
 
 st.markdown(f"<style>{get_css(CSS_FILE)}</style>", unsafe_allow_html=True)
 
+
 # Load JSON files to objects
 ## -> LLM
 with open(f"{SETTINGS_DIR}/llm.json", "r", encoding="utf-8") as file:
     llm_settings = json.load(file)
 ## System Prompt
-system_prompt = " ".join(f"{key.capitalize()}: {value}" for key, value in llm_settings["system_prompt"].items())
-## Developer promt
-developer_prompt = " ".join(f"{key.capitalize()}: {value}" for key, value in llm_settings["developer_prompt"].items())
+system_prompt = build_system_prompt(llm_settings["system_prompt"])
+print(system_prompt)
 
 ## -> Qdrant
 QDRANT_COLLECTION_DOCS = "Documents"
@@ -225,7 +215,7 @@ if prompt is not None:
     documents = []
 
     for f in uploaded or []:
-        # Save file to uploads folder
+        # Save file to uploads folder 
         saved_path = save_uploaded_file(f, UPLOADS_DIR)
         suffix = saved_path.suffix.lower()
 
@@ -296,5 +286,5 @@ if prompt is not None:
                 SETTINGS_DIR
             )
         
-        # Move file to processed folder
-        move_to_processed(doc_path)
+        # Move file to processed and uploaded folder
+        move_to_processed(PROCESSED_DIR, doc_path)

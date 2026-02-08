@@ -8,6 +8,19 @@ from typing import Any, List, Dict
 from qdrant_client import QdrantClient
 from qdrant_client.models import PointStruct, VectorParams
 
+# Flatten system prompt including formatting rules
+def build_system_prompt(prompt_dict):
+    parts = []
+    for key, value in prompt_dict.items():
+        if isinstance(value, dict):
+            # Flatten nested dict
+            parts.append(f"{key.capitalize()}:")
+            for subkey, subvalue in value.items():
+                parts.append(f"- {subkey}: {subvalue}")
+        else:
+            parts.append(f"{key.capitalize()}: {value}")
+    return "\n".join(parts)
+
 # Helper functions
 def build_input_parts(text: str, images: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     content = []
@@ -309,8 +322,24 @@ def determine_category_llm(client, text, categories, model_name):
         print(f"[ERROR] determine_category_llm failed: {e}")
         return "Pozostałe dokumenty"
     
-# Get all not imported files to qdrant
+
 def not_imported_files(qdrant_client, knowledge_dir, collection_name="Documents"):
+    """
+    Returns the number of files in a directory that have not yet been imported into a Qdrant collection.
+
+    Parameters:
+        qdrant_client: An instance of the Qdrant client used to query the collection.
+        knowledge_dir (str or Path): The directory containing documents to check.
+        collection_name (str, optional): The name of the Qdrant collection. Defaults to "Documents".
+
+    Returns:
+        int: The number of files in knowledge_dir that are not yet in the Qdrant collection.
+
+    Notes:
+        - A file is considered "imported" if its path is stored in the 'source' payload field of a point in Qdrant.
+        - The function recursively checks all files in knowledge_dir.
+        - Assumes that the collection contains a 'source' field for each point that tracks the original file path.
+    """
     knowledge_dir = Path(knowledge_dir)
     all_files = {str(f) for f in knowledge_dir.glob("**/*") if f.is_file()}
 
@@ -321,7 +350,24 @@ def not_imported_files(qdrant_client, knowledge_dir, collection_name="Documents"
     not_imported = all_files - imported_files
     return len(not_imported)
 
+
 def save_uploaded_file(uploaded_file, dest_folder: Path) -> Path:
+    """
+    Saves an uploaded file to a specified destination folder.
+
+    Parameters:
+        uploaded_file: The uploaded file object (e.g., from Streamlit's file uploader).
+        dest_folder (Path): The folder where the file should be saved. 
+                            If it doesn't exist, it will be created.
+
+    Returns:
+        Path: The full path to the saved file.
+
+    Notes:
+        - The function writes the file in binary mode, preserving all content.
+        - If the destination folder does not exist, it will be created automatically.
+        - The returned Path object can be used for further processing or indexing.
+    """
     dest_folder.mkdir(parents=True, exist_ok=True)
     file_path = dest_folder / uploaded_file.name
     with open(file_path, "wb") as f:
@@ -329,7 +375,22 @@ def save_uploaded_file(uploaded_file, dest_folder: Path) -> Path:
     return file_path
 
 def move_to_processed(processed_dir, file_path: Path) -> Path:
+    """
+    Copies a file to the processed directory without removing it from its source.
+
+    Parameters:
+        processed_dir (Path): The target folder where the file should be copied.
+                              If it doesn't exist, it will be created automatically.
+        file_path (Path): The path to the source file to be copied.
+
+    Returns:
+        Path: The full path to the copied file in the processed directory.
+
+    Notes:
+        - This function uses shutil.copy2 to preserve the original file's metadata.
+        - The source file remains untouched in its original location.
+    """
     processed_dir.mkdir(parents=True, exist_ok=True)
     dest = processed_dir / file_path.name
-    shutil.move(str(file_path), str(dest))
+    shutil.copy2(file_path, dest)
     return dest
