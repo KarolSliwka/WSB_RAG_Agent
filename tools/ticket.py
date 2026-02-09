@@ -27,7 +27,7 @@ class Ticket:
     description: str
     created_by: str
     category: str = "Pozostałe dokumenty"
-    priority: str = "low"
+    priority: str = "Informacyjne"
     attachments: List[Dict[str, Any]] = field(default_factory=list)
     ticket_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     status: str = "Open"
@@ -94,9 +94,9 @@ def assign_category_and_priority(client: OpenAI, model_name, conversation_contex
     try:
         output_json = json.loads(response.output_text)
         category = output_json.get("category", "Pozostałe dokumenty")
-        priority = output_json.get("priority", "low")
+        priority = output_json.get("priority", "Informacyjne")
     except Exception:
         category = "Pozostałe dokumenty"
-        priority = "low"
+        priority = "Informacyjne"
 
     return {"category": category, "priority": priority}
