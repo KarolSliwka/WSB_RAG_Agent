@@ -1,7 +1,7 @@
 {
     "priorities": [
-        "low",
-        "medium",
-        "high"
+        "Informacyjne",
+        "Sprawy Formalne",
+        "Pilne"
     ]
 }
