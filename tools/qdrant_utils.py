@@ -3,6 +3,7 @@ import uuid
 import hashlib
 import pytesseract
 import docx
+import shutil
 import pdfplumber
 import streamlit as st
 from pdf2image import convert_from_path
@@ -13,6 +14,19 @@ from qdrant_client.models import PointStruct, VectorParams
 from .api_utils import embed_text, embed_image
 from .llm_utils import determine_category_llm
 from .ticket import Ticket
+
+
+
+# Ensure Tesseract binary is found
+TESSERACT_PATH = shutil.which("tesseract")
+if TESSERACT_PATH is None:
+    raise RuntimeError("Tesseract OCR not found in PATH")
+
+pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
+
+# Set languages you want OCR to support => english / polish
+OCR_LANGS = "eng+pol"
+OCR_CONFIG = "--oem 3 --psm 6"
 
 def ensure_collections_exist(qdrant_client, collections=None, vector_size=1536, distance="Cosine"):
     """
@@ -275,8 +289,7 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
 def extract_text_from_pdf(file_path):
     """
     Robust PDF text extraction:
-    - Handles text PDFs with lists, bullets, tables, special characters
-    - Falls back to OCR for image-based pages
+    - Falls back to OCR for image-based pages with multiple languages
     """
     file_path = Path(file_path)
     full_text = []
@@ -285,7 +298,7 @@ def extract_text_from_pdf(file_path):
         with pdfplumber.open(str(file_path)) as pdf:
             for i, page in enumerate(pdf.pages):
                 page_text = page.extract_text()
-                
+
                 if page_text and page_text.strip():
                     full_text.append(page_text)
                 else:
@@ -294,7 +307,7 @@ def extract_text_from_pdf(file_path):
                     try:
                         images = convert_from_path(str(file_path), first_page=i+1, last_page=i+1, dpi=300)
                         for img in images:
-                            ocr_text = pytesseract.image_to_string(img, lang="pol")
+                            ocr_text = pytesseract.image_to_string(img, lang=OCR_LANGS, config=OCR_CONFIG)
                             full_text.append(ocr_text)
                     except Exception as ocr_err:
                         print(f"[ERROR] OCR failed on page {i+1} of {file_path}: {ocr_err}")
@@ -305,6 +318,7 @@ def extract_text_from_pdf(file_path):
     # Normalize line breaks and remove empty lines
     combined_text = "\n".join([line.strip() for line in "\n".join(full_text).splitlines() if line.strip()])
     return combined_text
+
 
 def create_ticket_in_qdrant(qdrant_client, ticket_data: dict, embedding_vector=None):
     """
