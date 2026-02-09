@@ -11,8 +11,8 @@ def determine_category_llm(client, text, categories, model_name):
         response = client.responses.create(
             model=model_name,
             input=prompt,
-            temperature=0.1,
-            top_p = 0.85
+            temperature=0, # => set to 0 to focus only on data from documents
+            #top_p = 0.85 # => removed either temperature or top_p to be used
         )
         category = response.output_text.strip()
         if category not in categories:
