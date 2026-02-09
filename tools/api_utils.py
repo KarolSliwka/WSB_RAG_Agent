@@ -19,11 +19,16 @@ def call_responses_api(system_prompt: str, client, model_name: str, embedding_mo
     user_texts = [c["text"] for p in parts for c in p.get("content", []) if c.get("type") == "input_text"]
     user_prompt = "\n".join(user_texts)
     context_texts = []
+    
     if qdrant_client and qdrant_collection:
         embedding = client.embeddings.create(model=embedding_model_name, input=user_prompt).data[0].embedding
         search_result = qdrant_client.query_points(collection_name=qdrant_collection, query=embedding, limit=top_k, with_payload=True).points
-        context_texts = [hit.payload.get("text", "") for hit in search_result if hit.payload]
-    final_input = f"{system_prompt}\n\nContext:\n{'\n\n'.join(context_texts)}\n\nUser: {user_prompt}"
+        context_str = '\n\n'.join([c for c in context_texts if c.strip()])
+        if context_str:
+            final_input = f"{system_prompt}\n\nContext:\n{context_str}\n\nUser: {user_prompt}"
+        else:
+            final_input = f"{system_prompt}\n\nUser: {user_prompt}"
+    
     return client.responses.create(model=model_name, input=final_input, previous_response_id=previous_response_id)
 
 def get_text_output(response: Any) -> str:
