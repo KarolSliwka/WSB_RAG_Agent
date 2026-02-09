@@ -183,12 +183,12 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
 
         file_h = hashlib.sha256(file_path.read_bytes()).hexdigest()
         if file_h in imported_hashes:
-            progress_text.write(f"✅ [SKIP] Already imported: {file_path.name}")
+            progress_text.write(f"[SKIP] Already imported: {file_path.name}")
             processed_files += 1
             progress_bar.progress(processed_files / total_files)
             continue
 
-        progress_text.write(f"⏳ [PROCESSING] {file_path.name}")
+        progress_text.write(f"[PROCESSING] {file_path.name}")
 
         text = ""
         try:
@@ -216,23 +216,23 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
                     )
                 )
                 flush_points()
-                progress_text.write(f"✅ [UPLOADED] Image: {file_path.name}")
+                progress_text.write(f"[UPLOADED] Image: {file_path.name}")
                 processed_files += 1
                 progress_bar.progress(processed_files / total_files)
                 continue
             else:
-                progress_text.write(f"⚠️ [SKIP] Unsupported file type: {file_path.name}")
+                progress_text.write(f"[SKIP] Unsupported file type: {file_path.name}")
                 processed_files += 1
                 progress_bar.progress(processed_files / total_files)
                 continue
         except Exception as e:
-            progress_text.write(f"❌ [ERROR] Failed to read {file_path.name}: {e}")
+            progress_text.write(f"[ERROR] Failed to read {file_path.name}: {e}")
             processed_files += 1
             progress_bar.progress(processed_files / total_files)
             continue
 
         if not text.strip():
-            progress_text.write(f"⚠️ [WARN] No text extracted from {file_path.name}, skipping")
+            progress_text.write(f"[WARN] No text extracted from {file_path.name}, skipping")
             processed_files += 1
             progress_bar.progress(processed_files / total_files)
             continue
@@ -254,7 +254,7 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
             try:
                 embedding = embed_text(client, embedding_model_name, chunk_text)
             except Exception as e:
-                progress_text.write(f"❌ [ERROR] Failed to embed chunk: {e}")
+                progress_text.write(f"[ERROR] Failed to embed chunk: {e}")
                 continue
 
             points_to_upload.append(
@@ -279,10 +279,10 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
 
         processed_files += 1
         progress_bar.progress(processed_files / total_files)
-        progress_text.write(f"✅ [UPLOADED] {file_path.name}")
+        progress_text.write(f"[UPLOADED] {file_path.name}")
 
     flush_points()
-    progress_text.write(f"🎉 Finished uploading points to {collection_name}")
+    progress_text.write(f"Finished uploading points to {collection_name}")
 
 
 def extract_text_from_pdf(file_path):
