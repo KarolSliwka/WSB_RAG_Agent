@@ -36,9 +36,12 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or st.secrets["OPENAI_API_KEY"]
 # VECTOR_STORE_ID = os.getenv("VECTOR_STORE_ID") or st.secrets["VECTOR_STORE_ID"]
 MODEL_NAME = os.getenv("MODEL_NAME") or st.secrets["MODEL_NAME"]
+CLASSIFYING_MODEL_NAME = os.getenv("CLASSIFYING_MODEL_NAME") or st.secrets["CLASSIFYING_MODEL_NAME"]
 EMBEDING_MODEL_NAME = os.getenv("EMBEDING_MODEL_NAME") or st.secrets["EMBEDING_MODEL_NAME"]
 QDRANT_URL = os.getenv("QDRANT_URL") or st.secrets["QDRANT_URL"]
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY") or st.secrets["QDRANT_API_KEY"]
+# Env check
+DEBUG = os.getenv("DEBUG", "False").lower() in ("true", "1", "yes")
 
 # Set the OpenAI API key in the os
 os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
@@ -159,28 +162,41 @@ with st.sidebar:
         # Reest the page
         st.rerun()
 
-    # st.divider()
+    if DEBUG:
+        st.divider() 
 
-    # Qdrant Management
-    # st.subheader("Qdrant Management")
-    # Compute not imported files at button click
-    # knowledge_not_imported = not_imported_files(qdrant_client, KNOWLEDGE_DIR)
-    # st.write(f"Files to import: {knowledge_not_imported}")
-    
-    # if st.button(f"Import Documents"):
-        # import_and_index_documents_qdrant(qdrant_client, client, EMBEDING_MODEL_NAME, KNOWLEDGE_DIR, MODEL_NAME, SETTINGS_DIR)
+        # Qdrant Management
+        st.subheader("Qdrant Management")
+        # Compute not imported files at button click
+        knowledge_not_imported = not_imported_files(qdrant_client, KNOWLEDGE_DIR)
+        st.write(f"Files to import: {knowledge_not_imported}")
+        
+        if st.button(f"Import Documents"):
+            import_and_index_documents_qdrant(qdrant_client, client, EMBEDING_MODEL_NAME, KNOWLEDGE_DIR, CLASSIFYING_MODEL_NAME, SETTINGS_DIR)
 
-    # Display each collection in Streamlit
-    # for coll in qdrant_collections_info:
-    #     st.markdown(f"**Collection:** {coll['name']}")
-    #     st.markdown(f"- Status: {coll['status']}")
-    #     st.markdown(f"- Points: {coll['points']}")
-    #     st.markdown(f"- Segments: {coll['shards']}")
-    #     st.markdown(f"- Replicas: {coll['replicas']}")
-    #     st.markdown(f"- Vector Field: {coll['vector_field']}")
-    #     st.markdown(f"- Vector Size: {coll['vector_size']}")
-    #     st.markdown(f"- Distance: {coll['distance']}")
-    #     st.divider()
+        # Display each collection in Streamlit
+        for coll in qdrant_collections_info:
+            st.markdown(f"**Collection:** {coll['name']}")
+            st.markdown(f"- Status: {coll['status']}")
+            st.markdown(f"- Points: {coll['points']}")
+            st.markdown(f"- Segments: {coll['shards']}")
+            st.markdown(f"- Replicas: {coll['replicas']}")
+            st.markdown(f"- Vector Field: {coll['vector_field']}")
+            st.markdown(f"- Vector Size: {coll['vector_size']}")
+            st.markdown(f"- Distance: {coll['distance']}")
+            st.divider()
+            
+        st.title("Qdrant Category Viewer")
+        if st.button("Get Category Counts"):
+            st.info("Fetching categories from Qdrant...")
+            category_counts = get_category_counts(qdrant_client, "Documents")
+
+            if category_counts:
+                st.success(f"Found {sum(category_counts.values())} points in {len(category_counts)} categories.")
+                for category, count in category_counts.items():
+                    st.write(f"**{category}:** {count} points")
+            else:
+                st.warning("No categories found in the collection.")
 
 # Render all previous messages
 for m in st.session_state.messages:
@@ -269,21 +285,21 @@ if prompt is not None:
                 st.session_state.messages.append({"role": "assistant", "content": output_text})
 
                 # Check if a ticket should be created
-                # if should_create_ticket(prompt, output_text):
-                #     ticket_data = {
-                #         "first_name": "",
-                #         "last_name": "",
-                #         "email": "",
-                #         "index_number": "",
-                #         "description": prompt,
-                #         "title": prompt[:50] + "...",
-                #         "priority": "low"
-                #     }
-                #     try:
-                #         ticket_id = create_ticket_in_qdrant(qdrant_client, ticket_data)
-                #         st.success(f"Ticket automatically created in Qdrant Tickets collection with ID: {ticket_id}")
-                #     except ValueError as e:
-                #         st.warning(str(e))
+                if should_create_ticket(prompt, output_text):
+                    ticket_data = {
+                        "first_name": "",
+                        "last_name": "",
+                        "email": "",
+                        "index_number": "",
+                        "description": prompt,
+                        "title": prompt[:50] + "...",
+                        "priority": "low"
+                    }
+                    try:
+                        ticket_id = create_ticket_in_qdrant(qdrant_client, ticket_data)
+                        st.success(f"Ticket automatically created in Qdrant Tickets collection with ID: {ticket_id}")
+                    except ValueError as e:
+                        st.warning(str(e))
 
                 if hasattr(response, "id"):
                     st.session_state.previous_response_id = response.id

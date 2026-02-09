@@ -1,25 +1,23 @@
-def determine_category_llm(client, text, categories, model_name):
-    """
-    Determine document category using LLM.
-    """
+import re
+import difflib
+
+
+def determine_category_llm(client, text, categories, classifying_model_name):
+    """Determine document category using LLM."""
     try:
         categories_str = "\n".join(f"- {c}" for c in categories)
         prompt = (
             "You are a document classifier. Assign text to exactly one category. Respond with only the category name.\n"
             f"Categories:\n{categories_str}\n\nText:\n{text[:2000]}...\nCategory:"
         )
-        response = client.responses.create(
-            model=model_name,
-            input=prompt,
-            temperature=0, # => set to 0 to focus only on data from documents
-            #top_p = 0.85 # => removed either temperature or top_p to be used
-        )
+        response = client.responses.create(model=classifying_model_name, input=prompt, temperature=0)
         category = response.output_text.strip()
         if category not in categories:
             return "Pozostałe dokumenty"
         return category
-    except Exception:
+    except Exception: 
         return "Pozostałe dokumenty"
+
 
 def build_system_prompt(prompt_dict):
     """
