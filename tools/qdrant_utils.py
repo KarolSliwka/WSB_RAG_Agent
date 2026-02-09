@@ -15,8 +15,6 @@ from .api_utils import embed_text, embed_image
 from .llm_utils import determine_category_llm
 from .ticket import Ticket
 
-
-
 # Ensure Tesseract binary is found
 TESSERACT_PATH = shutil.which("tesseract")
 if TESSERACT_PATH is None:
@@ -270,6 +268,7 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
                         "category": category,
                         "chunk_start": start,
                         "chunk_end": end,
+                        "text": chunk_text,
                         "upload_timestamp": datetime.utcnow().isoformat()
                     }
                 )
