@@ -14,6 +14,7 @@ from qdrant_client.models import PointStruct, VectorParams
 from .api_utils import embed_text, embed_image
 from .llm_utils import determine_category_llm
 from .ticket import Ticket
+from collections import Counter
 
 # Ensure Tesseract binary is found
 TESSERACT_PATH = shutil.which("tesseract")
@@ -140,7 +141,7 @@ def get_qdrant_collection_summary(qdrant_url, qdrant_api_key):
         print(f"Error fetching Qdrant info: {e}")
         return []
 
-def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_name, knowledge_dir, model_name, settings_dir, batch_size=200):
+def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_name, knowledge_dir,classifying_model_name, settings_dir, batch_size=200):
     """
     Import and index documents into Qdrant collection with Streamlit progress display.
     """
@@ -238,12 +239,12 @@ def import_and_index_documents_qdrant(qdrant_client, client, embedding_model_nam
             continue
 
         try:
-            category = determine_category_llm(client, text, categories, model_name)
+            category = determine_category_llm(client, text, categories, classifying_model_name)
         except Exception:
             category = "Pozostałe dokumenty"
 
         # Chunk text and embed
-        chunk_size = 800
+        chunk_size = 1000
         overlap = 200
         start = 0
         while start < len(text):
@@ -366,3 +367,46 @@ def create_ticket_in_qdrant(qdrant_client, ticket_data: dict, embedding_vector=N
 
     qdrant_client.upsert(collection_name="Tickets", points=[point])
     return ticket.ticket_id
+
+
+def get_category_counts(qdrant_client, collection_name):
+    """
+    Fetch all points from a Qdrant collection and count documents per category.
+    Returns a Counter dictionary.
+    """
+    all_categories = Counter()
+    offset = None
+    batch_size = 1000
+
+    while True:
+        response = qdrant_client.scroll(
+            collection_name=collection_name,
+            with_payload=True,
+            limit=batch_size,
+            offset=offset
+        )
+
+        # Handle tuple return (response, status_code)
+        if isinstance(response, tuple):
+            response = response[0]
+
+        # Get points whether response is object or list
+        points = getattr(response, "points", response)
+
+        if not points:
+            break
+
+        for point in points:
+            # payload is guaranteed to exist
+            payload = point.payload
+            category = payload.get("category")
+            if category:
+                all_categories[category] += 1
+
+        if len(points) < batch_size:
+            break
+
+        # offset is last point's id
+        offset = point.id if hasattr(points[-1], "id") else points[-1].get("id")
+
+    return all_categories
